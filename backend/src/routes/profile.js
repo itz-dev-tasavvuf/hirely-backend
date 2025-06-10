@@ -2,6 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import { supabase, supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser } from '../middleware/auth.js';
+import TextExtractor from '../utils/textExtractor.js';
+import PicaService from '../services/picaService.js';
 
 const router = express.Router();
 
@@ -19,15 +21,11 @@ const upload = multer({
         cb(new Error('Only image files are allowed for profile pictures'));
       }
     } else if (file.fieldname === 'resume') {
-      const allowedMimes = [
-        'application/pdf',
-        'application/msword',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      ];
-      if (allowedMimes.includes(file.mimetype)) {
+      try {
+        TextExtractor.validateFileType(file.mimetype, file.originalname);
         cb(null, true);
-      } else {
-        cb(new Error('Only PDF and Word documents are allowed for resumes'));
+      } catch (error) {
+        cb(new Error(error.message));
       }
     } else if (file.fieldname === 'companyLogo') {
       if (file.mimetype.startsWith('image/')) {
@@ -200,7 +198,7 @@ router.post('/picture', authenticateUser, upload.single('profilePicture'), async
   }
 });
 
-// Upload resume (candidates only)
+// Upload resume (candidates only) with AI parsing
 router.post('/resume', authenticateUser, upload.single('resume'), async (req, res) => {
   try {
     if (!req.file) {
@@ -231,19 +229,74 @@ router.post('/resume', authenticateUser, upload.single('resume'), async (req, re
       .from('resumes')
       .getPublicUrl(fileName);
 
-    // Update candidate details with new resume URL
+    let parsedData = {};
+    
+    try {
+      // Extract text from the uploaded file
+      console.log('Extracting text from resume...');
+      const extractedText = await TextExtractor.extractText(
+        req.file.buffer, 
+        req.file.mimetype, 
+        req.file.originalname
+      );
+
+      console.log('Text extracted, length:', extractedText.length);
+
+      // Analyze with Pica AI
+      console.log('Analyzing resume with AI...');
+      parsedData = await PicaService.analyzeResume(extractedText);
+      console.log('AI analysis completed');
+
+    } catch (aiError) {
+      console.error('AI processing error:', aiError);
+      // Continue without AI data, but log the error
+      parsedData = {
+        error: 'AI processing failed',
+        extractedText: aiError.message
+      };
+    }
+
+    // Update candidate details with resume URL and parsed data
     const { error: updateError } = await supabaseAdmin
       .from('candidate_details')
-      .update({ resume_url: publicUrl })
+      .update({ 
+        resume_url: publicUrl,
+        parsed_resume_data: parsedData 
+      })
       .eq('profile_id', userId);
 
     if (updateError) {
       return res.status(400).json({ error: updateError.message });
     }
 
+    // If AI parsing was successful, also update profile with extracted info
+    if (parsedData.full_name || parsedData.contact_info?.email) {
+      const profileUpdates = {};
+      
+      if (parsedData.full_name && !req.profile.full_name) {
+        profileUpdates.full_name = parsedData.full_name;
+      }
+      
+      if (parsedData.location && !req.profile.location) {
+        profileUpdates.location = parsedData.location;
+      }
+
+      if (parsedData.summary_or_objective && !req.profile.bio) {
+        profileUpdates.bio = parsedData.summary_or_objective;
+      }
+
+      if (Object.keys(profileUpdates).length > 0) {
+        await supabaseAdmin
+          .from('profiles')
+          .update(profileUpdates)
+          .eq('id', userId);
+      }
+    }
+
     res.json({
-      message: 'Resume uploaded successfully',
-      url: publicUrl
+      message: 'Resume uploaded and analyzed successfully',
+      url: publicUrl,
+      parsed_data: parsedData
     });
 
   } catch (error) {
@@ -305,3 +358,4 @@ router.post('/company-logo', authenticateUser, upload.single('companyLogo'), asy
 });
 
 export default router;
+</invoke>

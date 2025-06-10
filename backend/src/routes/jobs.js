@@ -1,6 +1,7 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser, requireUserType } from '../middleware/auth.js';
+import PicaService from '../services/picaService.js';
 
 const router = express.Router();
 
@@ -144,7 +145,7 @@ router.post('/:jobId/interact', authenticateUser, requireUserType('candidate'), 
   }
 });
 
-// Create new job (employers only)
+// Create new job (employers only) with AI analysis
 router.post('/', authenticateUser, requireUserType('employer'), async (req, res) => {
   try {
     const {
@@ -168,7 +169,7 @@ router.post('/', authenticateUser, requireUserType('employer'), async (req, res)
     }
 
     // Get employer details for company name
-    const { data: employerDetails, error: employerError } = await supabase
+    const { data: employerDetails, error: employerError } = await supabaseAdmin
       .from('employer_details')
       .select('company_name')
       .eq('profile_id', req.user.id)
@@ -178,7 +179,8 @@ router.post('/', authenticateUser, requireUserType('employer'), async (req, res)
       return res.status(400).json({ error: 'Employer profile not found' });
     }
 
-    const { data: job, error } = await supabase
+    // Create the job first
+    const { data: job, error: jobError } = await supabaseAdmin
       .from('jobs')
       .insert({
         employer_id: req.user.id,
@@ -199,13 +201,66 @@ router.post('/', authenticateUser, requireUserType('employer'), async (req, res)
       .select()
       .single();
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    if (jobError) {
+      return res.status(400).json({ error: jobError.message });
+    }
+
+    // Analyze job description with AI
+    let parsedData = {};
+    try {
+      console.log('Analyzing job description with AI...');
+      
+      // Combine all job description text for analysis
+      const fullJobDescription = `
+Title: ${title}
+Company: ${employerDetails.company_name}
+Location: ${location}
+Job Type: ${jobType}
+Salary Range: ${salaryRange || 'Not specified'}
+
+Requirements:
+${requirements}
+
+About the Role:
+${aboutRole || 'Not specified'}
+
+Benefits:
+${benefits || 'Not specified'}
+
+Team Size: ${teamSize || 'Not specified'}
+Remote Friendly: ${remoteFriendly ? 'Yes' : 'No'}
+Career Growth: ${careerGrowth ? 'Yes' : 'No'}
+Great Culture: ${greatCulture ? 'Yes' : 'No'}
+      `.trim();
+
+      parsedData = await PicaService.analyzeJobDescription(fullJobDescription);
+      console.log('AI job analysis completed');
+
+      // Update the job with parsed data
+      const { error: updateError } = await supabaseAdmin
+        .from('jobs')
+        .update({ parsed_requirements_data: parsedData })
+        .eq('id', job.id);
+
+      if (updateError) {
+        console.error('Failed to update job with parsed data:', updateError);
+      }
+
+    } catch (aiError) {
+      console.error('AI job analysis error:', aiError);
+      // Continue without AI data, but log the error
+      parsedData = {
+        error: 'AI processing failed',
+        message: aiError.message
+      };
     }
 
     res.status(201).json({
-      message: 'Job created successfully',
-      job
+      message: 'Job created and analyzed successfully',
+      job: {
+        ...job,
+        parsed_requirements_data: parsedData
+      }
     });
 
   } catch (error) {
@@ -253,3 +308,4 @@ router.get('/employer/my-jobs', authenticateUser, requireUserType('employer'), a
 });
 
 export default router;
+</invoke>

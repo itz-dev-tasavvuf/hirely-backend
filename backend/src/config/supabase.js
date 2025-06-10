@@ -1,7 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import path from 'path';
 
-dotenv.config();
+// Load .env from root directory
+dotenv.config({ path: path.resolve(process.cwd(), '../.env') });
 
 console.log('Environment check:', {
   SUPABASE_URL: process.env.SUPABASE_URL ? 'Set' : 'Missing',
@@ -73,7 +75,7 @@ export async function initializeStorage() {
         name: 'resumes',
         options: {
           public: false,
-          allowedMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+          allowedMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'],
           fileSizeLimit: 10485760 // 10MB
         }
       },
