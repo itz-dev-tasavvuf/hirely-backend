@@ -3,8 +3,20 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
-  throw new Error('Missing Supabase environment variables');
+console.log('Environment check:', {
+  SUPABASE_URL: process.env.SUPABASE_URL ? 'Set' : 'Missing',
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ? 'Set' : 'Missing',
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'Set' : 'Missing'
+});
+
+if (!process.env.SUPABASE_URL) {
+  console.error('SUPABASE_URL is missing from environment variables');
+  process.exit(1);
+}
+
+if (!process.env.SUPABASE_ANON_KEY) {
+  console.error('SUPABASE_ANON_KEY is missing from environment variables');
+  process.exit(1);
 }
 
 // Create Supabase client

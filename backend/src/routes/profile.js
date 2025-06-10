@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { supabase } from '../config/supabase.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js';
 import { authenticateUser } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -29,6 +29,12 @@ const upload = multer({
       } else {
         cb(new Error('Only PDF and Word documents are allowed for resumes'));
       }
+    } else if (file.fieldname === 'companyLogo') {
+      if (file.mimetype.startsWith('image/')) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only image files are allowed for company logos'));
+      }
     } else {
       cb(new Error('Unknown file field'));
     }
@@ -39,23 +45,13 @@ const upload = multer({
 router.get('/', authenticateUser, async (req, res) => {
   try {
     const userId = req.user.id;
-
-    // Get basic profile
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-
-    if (profileError) {
-      return res.status(404).json({ error: 'Profile not found' });
-    }
+    const profile = req.profile;
 
     let userDetails = null;
 
     // Get user-type specific details
     if (profile.user_type === 'candidate') {
-      const { data: candidateDetails, error: candidateError } = await supabase
+      const { data: candidateDetails, error: candidateError } = await supabaseAdmin
         .from('candidate_details')
         .select('*')
         .eq('profile_id', userId)
@@ -65,7 +61,7 @@ router.get('/', authenticateUser, async (req, res) => {
         userDetails = candidateDetails;
       }
     } else if (profile.user_type === 'employer') {
-      const { data: employerDetails, error: employerError } = await supabase
+      const { data: employerDetails, error: employerError } = await supabaseAdmin
         .from('employer_details')
         .select('*')
         .eq('profile_id', userId)
@@ -91,7 +87,8 @@ router.get('/', authenticateUser, async (req, res) => {
 router.put('/', authenticateUser, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { fullName, location, bio, userType, ...userTypeFields } = req.body;
+    const profile = req.profile;
+    const { fullName, location, bio, ...userTypeFields } = req.body;
 
     // Update basic profile
     const profileUpdates = {};
@@ -100,7 +97,7 @@ router.put('/', authenticateUser, async (req, res) => {
     if (bio !== undefined) profileUpdates.bio = bio;
 
     if (Object.keys(profileUpdates).length > 0) {
-      const { error: profileError } = await supabase
+      const { error: profileError } = await supabaseAdmin
         .from('profiles')
         .update(profileUpdates)
         .eq('id', userId);
@@ -111,7 +108,7 @@ router.put('/', authenticateUser, async (req, res) => {
     }
 
     // Update user-type specific details
-    if (userType === 'candidate' && Object.keys(userTypeFields).length > 0) {
+    if (profile.user_type === 'candidate' && Object.keys(userTypeFields).length > 0) {
       const candidateUpdates = {};
       if (userTypeFields.skills !== undefined) candidateUpdates.skills = userTypeFields.skills;
       if (userTypeFields.experienceLevel !== undefined) candidateUpdates.experience_level = userTypeFields.experienceLevel;
@@ -119,7 +116,7 @@ router.put('/', authenticateUser, async (req, res) => {
       if (userTypeFields.jobPreferences !== undefined) candidateUpdates.job_preferences = userTypeFields.jobPreferences;
 
       if (Object.keys(candidateUpdates).length > 0) {
-        const { error: candidateError } = await supabase
+        const { error: candidateError } = await supabaseAdmin
           .from('candidate_details')
           .update(candidateUpdates)
           .eq('profile_id', userId);
@@ -128,7 +125,7 @@ router.put('/', authenticateUser, async (req, res) => {
           return res.status(400).json({ error: candidateError.message });
         }
       }
-    } else if (userType === 'employer' && Object.keys(userTypeFields).length > 0) {
+    } else if (profile.user_type === 'employer' && Object.keys(userTypeFields).length > 0) {
       const employerUpdates = {};
       if (userTypeFields.companyName !== undefined) employerUpdates.company_name = userTypeFields.companyName;
       if (userTypeFields.industry !== undefined) employerUpdates.industry = userTypeFields.industry;
@@ -136,7 +133,7 @@ router.put('/', authenticateUser, async (req, res) => {
       if (userTypeFields.websiteUrl !== undefined) employerUpdates.website_url = userTypeFields.websiteUrl;
 
       if (Object.keys(employerUpdates).length > 0) {
-        const { error: employerError } = await supabase
+        const { error: employerError } = await supabaseAdmin
           .from('employer_details')
           .update(employerUpdates)
           .eq('profile_id', userId);
@@ -166,7 +163,7 @@ router.post('/picture', authenticateUser, upload.single('profilePicture'), async
     const fileName = `${userId}-${Date.now()}.${req.file.originalname.split('.').pop()}`;
 
     // Upload to Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from('profile-pictures')
       .upload(fileName, req.file.buffer, {
         contentType: req.file.mimetype,
@@ -178,12 +175,12 @@ router.post('/picture', authenticateUser, upload.single('profilePicture'), async
     }
 
     // Get public URL
-    const { data: { publicUrl } } = supabase.storage
+    const { data: { publicUrl } } = supabaseAdmin.storage
       .from('profile-pictures')
       .getPublicUrl(fileName);
 
     // Update profile with new picture URL
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseAdmin
       .from('profiles')
       .update({ profile_picture_url: publicUrl })
       .eq('id', userId);
@@ -203,18 +200,22 @@ router.post('/picture', authenticateUser, upload.single('profilePicture'), async
   }
 });
 
-// Upload resume
+// Upload resume (candidates only)
 router.post('/resume', authenticateUser, upload.single('resume'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
+    if (req.profile.user_type !== 'candidate') {
+      return res.status(403).json({ error: 'Only candidates can upload resumes' });
+    }
+
     const userId = req.user.id;
     const fileName = `${userId}-resume-${Date.now()}.${req.file.originalname.split('.').pop()}`;
 
     // Upload to Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from('resumes')
       .upload(fileName, req.file.buffer, {
         contentType: req.file.mimetype,
@@ -226,12 +227,12 @@ router.post('/resume', authenticateUser, upload.single('resume'), async (req, re
     }
 
     // Get public URL (for private bucket, this would be a signed URL)
-    const { data: { publicUrl } } = supabase.storage
+    const { data: { publicUrl } } = supabaseAdmin.storage
       .from('resumes')
       .getPublicUrl(fileName);
 
     // Update candidate details with new resume URL
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseAdmin
       .from('candidate_details')
       .update({ resume_url: publicUrl })
       .eq('profile_id', userId);
@@ -247,6 +248,58 @@ router.post('/resume', authenticateUser, upload.single('resume'), async (req, re
 
   } catch (error) {
     console.error('Resume upload error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Upload company logo (employers only)
+router.post('/company-logo', authenticateUser, upload.single('companyLogo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    if (req.profile.user_type !== 'employer') {
+      return res.status(403).json({ error: 'Only employers can upload company logos' });
+    }
+
+    const userId = req.user.id;
+    const fileName = `${userId}-logo-${Date.now()}.${req.file.originalname.split('.').pop()}`;
+
+    // Upload to Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+      .from('company-logos')
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true
+      });
+
+    if (uploadError) {
+      return res.status(400).json({ error: uploadError.message });
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabaseAdmin.storage
+      .from('company-logos')
+      .getPublicUrl(fileName);
+
+    // Update employer details with new logo URL
+    const { error: updateError } = await supabaseAdmin
+      .from('employer_details')
+      .update({ company_logo_url: publicUrl })
+      .eq('profile_id', userId);
+
+    if (updateError) {
+      return res.status(400).json({ error: updateError.message });
+    }
+
+    res.json({
+      message: 'Company logo uploaded successfully',
+      url: publicUrl
+    });
+
+  } catch (error) {
+    console.error('Company logo upload error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

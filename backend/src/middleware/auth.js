@@ -1,4 +1,4 @@
-import { supabase } from '../config/supabase.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js';
 
 export async function authenticateUser(req, res, next) {
   try {
@@ -21,12 +21,21 @@ export async function authenticateUser(req, res, next) {
       });
     }
 
-    // Attach user to request object
+    // Get user profile
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(404).json({ error: 'User profile not found' });
+    }
+
+    // Attach user and profile to request object
     req.user = user;
+    req.profile = profile;
     req.token = token;
-    
-    // Set Supabase auth context for RLS
-    supabase.auth.setAuth(token);
     
     next();
   } catch (error) {
@@ -40,28 +49,37 @@ export async function authenticateUser(req, res, next) {
 export function requireUserType(userType) {
   return async (req, res, next) => {
     try {
-      if (!req.user) {
+      if (!req.profile) {
         return res.status(401).json({ error: 'User not authenticated' });
       }
 
-      // Get user profile to check user type
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('user_type')
-        .eq('id', req.user.id)
-        .single();
-
-      if (error || !profile) {
-        return res.status(404).json({ error: 'User profile not found' });
-      }
-
-      if (profile.user_type !== userType) {
+      if (req.profile.user_type !== userType) {
         return res.status(403).json({ 
           error: `Access denied. Required user type: ${userType}` 
         });
       }
 
-      req.userType = profile.user_type;
+      next();
+    } catch (error) {
+      console.error('User type check error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  };
+}
+
+export function requireAnyUserType(userTypes) {
+  return async (req, res, next) => {
+    try {
+      if (!req.profile) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+
+      if (!userTypes.includes(req.profile.user_type)) {
+        return res.status(403).json({ 
+          error: `Access denied. Required user types: ${userTypes.join(', ')}` 
+        });
+      }
+
       next();
     } catch (error) {
       console.error('User type check error:', error);
