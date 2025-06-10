@@ -9,13 +9,33 @@ console.log('Environment check:', {
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'Set' : 'Missing'
 });
 
+// Validate SUPABASE_URL
 if (!process.env.SUPABASE_URL) {
   console.error('SUPABASE_URL is missing from environment variables');
   process.exit(1);
 }
 
+// Check if SUPABASE_URL is a valid URL and not a placeholder
+try {
+  new URL(process.env.SUPABASE_URL);
+  if (process.env.SUPABASE_URL.includes('your-project') || process.env.SUPABASE_URL === 'your_supabase_project_url') {
+    throw new Error('SUPABASE_URL appears to be a placeholder value');
+  }
+} catch (error) {
+  console.error('SUPABASE_URL is not a valid URL:', process.env.SUPABASE_URL);
+  console.error('Please set SUPABASE_URL to a valid Supabase project URL (e.g., https://your-project.supabase.co)');
+  process.exit(1);
+}
+
 if (!process.env.SUPABASE_ANON_KEY) {
   console.error('SUPABASE_ANON_KEY is missing from environment variables');
+  process.exit(1);
+}
+
+// Check if keys are not placeholder values
+if (process.env.SUPABASE_ANON_KEY.includes('your_') || process.env.SUPABASE_ANON_KEY === 'your_anon_key_here') {
+  console.error('SUPABASE_ANON_KEY appears to be a placeholder value');
+  console.error('Please set SUPABASE_ANON_KEY to your actual Supabase anonymous key');
   process.exit(1);
 }
 
